@@ -1,532 +1,293 @@
 <?php
 
 class acf_field_select2 extends acf_field {
-	
-	
-	/*
-	*  __construct
-	*
-	*  This function will setup the field type data
-	*
-	*  @type	function
-	*  @date	5/03/2014
-	*  @since	5.0.0
-	*
-	*  @param	n/a
-	*  @return	n/a
-	*/
-	
-	function __construct() {
-		
-		/*
-		*  name (string) Single word, no spaces. Underscores allowed
-		*/
-		
+
+	var $settings, // will hold info such as dir / path
+			$defaults; // will hold default field options
+
+
+	function __construct()
+	{
 		$this->name = 'select2';
-		
-		
-		/*
-		*  label (string) Multiple words, can include spaces, visible when selecting a field type
-		*/
-		
-		$this->label = __('Select2', 'acf-select2');
-		
-		
-		/*
-		*  category (string) basic | content | choice | relational | jquery | layout | CUSTOM GROUP NAME
-		*/
-		
-		$this->category = 'basic';
-		
-		
-		/*
-		*  defaults (array) Array of default settings which are merged into the field object. These are used later in settings
-		*/
-		
+		$this->label = __('Select2');
+		$this->category = __("Basic",'acf'); // Basic, Content, Choice, etc
 		$this->defaults = array(
-			'font_size'	=> 14,
+				'field_type' 		=> 'select',
+				'allow_null' 		=> 0,
+				'load_save_terms' 	=> 1,
+				'multiple'			=> 1,
+				'return_format'		=> 'id'
 		);
-		
-		
-		/*
-		*  l10n (array) Array of strings that are used in JavaScript. This allows JS strings to be translated in PHP and loaded via:
-		*  var message = acf._e('select2', 'error');
-		*/
-		
-		$this->l10n = array(
-			'error'	=> __('Error! Please enter a higher value', 'acf-select2'),
-		);
-		
-				
+
 		// do not delete!
-    	parent::__construct();
-    	
+		parent::__construct();
+
+		// settings
+		$this->settings = array(
+				'path' => apply_filters('acf/helpers/get_path', __FILE__),
+				'dir' => apply_filters('acf/helpers/get_dir', __FILE__),
+				'version' => '1.0.0'
+		);
+
+		add_filter('acf/update_field/type=select2', array($this, 'update_field'), 5, 2);
 	}
-	
-	
+
 	/*
-	*  render_field_settings()
-	*
-	*  Create extra settings for your field. These are visible when editing a field
-	*
-	*  @type	action
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	$field (array) the $field being edited
-	*  @return	n/a
-	*/
-	
-	function render_field_settings( $field ) {
-		
-		/*
-		*  acf_render_field_setting
-		*
-		*  This function will create a setting for your field. Simply pass the $field parameter and an array of field settings.
-		*  The array of settings does not require a `value` or `prefix`; These settings are found from the $field array.
-		*
-		*  More than one setting can be added by copy/paste the above code.
-		*  Please note that you must also have a matching $defaults value for the field name (font_size)
-		*/
-		
-		acf_render_field_setting( $field, array(
-			'label'			=> __('Font Size','acf-select2'),
-			'instructions'	=> __('Customise the input font size','acf-select2'),
-			'type'			=> 'number',
-			'name'			=> 'font_size',
-			'prepend'		=> 'px',
-		));
+    *  This filter is applied to the $value after it is loaded from the db
+    *
+    *  @param	$value - the value found in the database
+    *  @param	$post_id - the $post_id from which the value was loaded from
+    *  @param	$field - the field array holding all the field options
+    *
+    *  @return	$value - the value to be saved in te database
+    */
+
+	function load_value( $value, $post_id, $field )
+	{
+		if( $field['load_save_terms'] )
+		{
+			$value = array();
+
+			$terms = get_the_terms( $post_id, $field['taxonomy'] );
+
+			if( is_array($terms) ){ foreach( $terms as $term ){
+				$value[] = $term->term_id;
+			}}
+		}
+
+		return $value;
+	}
+
+	/**
+	 *  This filter is appied to the $value before it is updated in the db
+	 *
+	 *  @param	$value - the value which will be saved in the database
+	 *  @param	$field - the field array holding all the field options
+	 *  @param	$post_id - the $post_id of which the value will be saved
+	 *
+	 *  @return	$value - the modified value
+	 */
+
+	function update_value( $value, $post_id, $field )
+	{
+		if( is_array($value) )
+		{
+			$value = array_filter($value);
+		} else {
+			$value = explode(',', $value);
+		}
+
+		if( $field['load_save_terms'] )
+		{
+			$value = acf_parse_types( $value );
+			wp_set_object_terms( $post_id, $value, $field['taxonomy'], false );
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Send request to platform and get back ID of term in Wordpress
+	 *
+	 * @param $taxonomy
+	 * @param $term
+	 * @param $slug
+	 * @return array|mixed
+	 */
+
+	function addTermToDatabase($taxonomy, $term, $slug) {
+		$ch = curl_init();
+
+		$uri = home_url("api/taxonomy/add");
+		curl_setopt($ch, CURLOPT_URL, $uri);
+		curl_setopt($ch, CURLOPT_POST, 1);
+
+		curl_setopt($ch, CURLOPT_POSTFIELDS,
+				http_build_query(array('dimension' => $taxonomy, 'term' => $term, 'slug' => $slug)));
+
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+		$server_output = curl_exec ($ch);
+
+		return json_decode($server_output);
+	}
+
+	/**
+	 *  This filter is appied to the $value after it is loaded from the db and before it is passed back to the api functions such as the_field
+	 *
+	 *  @param	$value	- the value which was loaded from the database
+	 *  @param	$post_id - the $post_id from which the value was loaded
+	 *  @param	$field	- the field array holding all the field options
+	 *
+	 *  @return	$value	- the modified value
+	 */
+
+	function format_value_for_api( $value, $post_id, $field )
+	{
+		if( !$value )
+		{
+			return $value;
+		}
+
+		$is_array = true;
+
+		if( !is_array($value) )
+		{
+			$is_array = false;
+			$value = array( $value );
+		}
+
+		// format
+		if( $field['return_format'] == 'object' )
+		{
+			foreach( $value as $k => $v )
+			{
+				$value[ $k ] = get_term( $v, $field['taxonomy'] );
+			}
+		}
+
+
+		// de-convert from array
+		if( !$is_array && isset($value[0]) )
+		{
+			$value = $value[0];
+		}
+
+		// Note: This function can be removed if not used
+		return $value;
+	}
+
+	/**
+	 *  Create extra options for your field. This is rendered when editing a field.
+	 *  The value of $field['name'] can be used (like below) to save extra data to the $field
+	 *
+	 *  @param	$field	- an array holding all the field's data
+	 */
+
+	function create_options( $field )
+	{
+		$key = $field['name'];
+
+
+		// Create Field Options HTML
+		?>
+		<tr class="field_option field_option_<?php echo $this->name; ?>">
+			<td class="label">
+				<label>Options</label>
+				<p class="description">Options for select2 field</p>
+			</td>
+			<td>
+				<?php
+
+				do_action('acf/render_field', array(
+						'type'	=>	'textarea',
+						'name'	=>	'fields['.$key.'][values]',
+						'value'	=>	$field['values'],
+				));
+
+				?>
+			</td>
+		</tr>
+		<?php
 
 	}
-	
-	
-	
-	/*
-	*  render_field()
-	*
-	*  Create the HTML interface for your field
-	*
-	*  @param	$field (array) the $field being rendered
-	*
-	*  @type	action
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	$field (array) the $field being edited
-	*  @return	n/a
-	*/
-	
-	function render_field( $field ) {
-		
-		
-		/*
-		*  Review the data of $field.
-		*  This will show what data is available
-		*/
-		
-		echo '<pre>';
-			print_r( $field );
-		echo '</pre>';
-		
-		
-		/*
-		*  Create a simple text input using the 'font_size' setting.
-		*/
-		
+
+
+	/**
+	 *  Create the HTML interface for your field
+	 *
+	 *  @param	$field - an array holding all the field's data
+	 */
+
+	function render_field( $field )
+	{
+		$field['values'] = isset($field['values']) ? $field['values'] : [];
+		// value must be array
+		if( !is_array($field['values']) )
+		{
+			if( strpos($field['values'], "\n") !== false )
+			{
+				// found multiple lines, explode it
+				$field['values'] = explode("\n", $field['values']);
+			}
+			else
+			{
+				$field['values'] = array( $field['values'] );
+			}
+			foreach($field["values"] as $val) {
+				$choice = explode(":", $val);
+				$values[$choice[0]] = $choice[1];
+			}
+
+		} else if(is_array($field["values"])) {
+			$values = $field["values"];
+		}
+
+		// trim value
+		$field['values'] = array_map('trim', $field['values']);
+
+		$taxonomies= get_terms($field['taxonomy'], ['hide_empty' => false]);
+		foreach($taxonomies as $val) {
+			$values[$val->term_id] = $val->name;
+		}
+
+
+		$style = "<style> #acf-".$field["taxonomy"]."{ display: none; }</style>";
 		?>
-		<input type="text" name="<?php echo esc_attr($field['name']) ?>" value="<?php echo esc_attr($field['value']) ?>" style="font-size:<?php echo $field['font_size'] ?>px;" />
+		<?php if ($field['hidden'] == 1): ?>
+		<?php echo $style ?>
+	<?php endif ?>
+		<input class="text" type='hidden' value='<?php echo implode(',', $field["value"]) ?>' name='<?php echo $field["name"] ?>' id='js-select2-<?php echo $field["id"] ?>' />
+
+		<div class="hidden">
+			<select id="<?php echo $field["id"] ?>" class="js-select2" data-required="<?php echo $field["required"] ?>" data-static="<?php echo $field["static"] ?>">
+				<?php
+				foreach($values as $key => $val) {
+					$params = null;
+					if(in_array($key, $field['value'])) {
+						$params = 'selected="selected"';
+					}
+
+					if(!empty($key) || !empty($val)) {
+						$row = sprintf('<option value="%s" %s>%s</option>', $key, $params, $val);
+						echo $row;
+					}
+				}
+				?>
+			</select>
+		</div>
 		<?php
 	}
-	
-		
-	/*
-	*  input_admin_enqueue_scripts()
-	*
-	*  This action is called in the admin_enqueue_scripts action on the edit screen where your field is created.
-	*  Use this action to add CSS + JavaScript to assist your render_field() action.
-	*
-	*  @type	action (admin_enqueue_scripts)
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	n/a
-	*  @return	n/a
-	*/
 
-	/*
-	
-	function input_admin_enqueue_scripts() {
-		
-		$dir = plugin_dir_url( __FILE__ );
-		
-		
-		// register & include JS
-		wp_register_script( 'acf-input-select2', "{$dir}js/input.js" );
-		wp_enqueue_script('acf-input-select2');
-		
-		
-		// register & include CSS
-		wp_register_style( 'acf-input-select2', "{$dir}css/input.css" );
-		wp_enqueue_style('acf-input-select2');
-		
-		
+	function input_admin_enqueue_scripts()
+	{
+		// register ACF scripts
+		wp_register_script( 'acf-input-select2-field', get_template_directory_uri() . '/js/acf-select2-field.js', array('acf-input'), $this->settings['version'], true );
+
+		wp_register_style( 'acf-input-select2', get_template_directory_uri() . '/select2.css', array('acf-input'), $this->settings['version'] );
+
+
+		// scripts
+		wp_enqueue_script(array(
+				'acf-input-select2-field',
+		));
+
+		// styles
+		wp_enqueue_style(array(
+				'acf-input-select2',
+		));
 	}
-	
-	*/
-	
-	
-	/*
-	*  input_admin_head()
-	*
-	*  This action is called in the admin_head action on the edit screen where your field is created.
-	*  Use this action to add CSS and JavaScript to assist your render_field() action.
-	*
-	*  @type	action (admin_head)
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	n/a
-	*  @return	n/a
-	*/
 
-	/*
-		
-	function input_admin_head() {
-	
-		
-		
-	}
-	
-	*/
-	
-	
-	/*
-   	*  input_form_data()
-   	*
-   	*  This function is called once on the 'input' page between the head and footer
-   	*  There are 2 situations where ACF did not load during the 'acf/input_admin_enqueue_scripts' and 
-   	*  'acf/input_admin_head' actions because ACF did not know it was going to be used. These situations are
-   	*  seen on comments / user edit forms on the front end. This function will always be called, and includes
-   	*  $args that related to the current screen such as $args['post_id']
-   	*
-   	*  @type	function
-   	*  @date	6/03/2014
-   	*  @since	5.0.0
-   	*
-   	*  @param	$args (array)
-   	*  @return	n/a
-   	*/
-   	
-   	/*
-   	
-   	function input_form_data( $args ) {
-	   	
-		
-	
-   	}
-   	
-   	*/
-	
-	
-	/*
-	*  input_admin_footer()
-	*
-	*  This action is called in the admin_footer action on the edit screen where your field is created.
-	*  Use this action to add CSS and JavaScript to assist your render_field() action.
-	*
-	*  @type	action (admin_footer)
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	n/a
-	*  @return	n/a
-	*/
-
-	/*
-		
-	function input_admin_footer() {
-	
-		
-		
-	}
-	
-	*/
-	
-	
-	/*
-	*  field_group_admin_enqueue_scripts()
-	*
-	*  This action is called in the admin_enqueue_scripts action on the edit screen where your field is edited.
-	*  Use this action to add CSS + JavaScript to assist your render_field_options() action.
-	*
-	*  @type	action (admin_enqueue_scripts)
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	n/a
-	*  @return	n/a
-	*/
-
-	/*
-	
-	function field_group_admin_enqueue_scripts() {
-		
-	}
-	
-	*/
-
-	
-	/*
-	*  field_group_admin_head()
-	*
-	*  This action is called in the admin_head action on the edit screen where your field is edited.
-	*  Use this action to add CSS and JavaScript to assist your render_field_options() action.
-	*
-	*  @type	action (admin_head)
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	n/a
-	*  @return	n/a
-	*/
-
-	/*
-	
-	function field_group_admin_head() {
-	
-	}
-	
-	*/
-
-
-	/*
-	*  load_value()
-	*
-	*  This filter is applied to the $value after it is loaded from the db
-	*
-	*  @type	filter
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	$value (mixed) the value found in the database
-	*  @param	$post_id (mixed) the $post_id from which the value was loaded
-	*  @param	$field (array) the field array holding all the field options
-	*  @return	$value
-	*/
-	
-	/*
-	
-	function load_value( $value, $post_id, $field ) {
-		
-		return $value;
-		
-	}
-	
-	*/
-	
-	
-	/*
-	*  update_value()
-	*
-	*  This filter is applied to the $value before it is saved in the db
-	*
-	*  @type	filter
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	$value (mixed) the value found in the database
-	*  @param	$post_id (mixed) the $post_id from which the value was loaded
-	*  @param	$field (array) the field array holding all the field options
-	*  @return	$value
-	*/
-	
-	/*
-	
-	function update_value( $value, $post_id, $field ) {
-		
-		return $value;
-		
-	}
-	
-	*/
-	
-	
-	/*
-	*  format_value()
-	*
-	*  This filter is applied to the $value after it is loaded from the db and before it is passed to the render_field() function
-	*
-	*  @type	filter
-	*  @since	3.6
-	*  @date	23/01/13
-	*
-	*  @param	$value (mixed) the value which was loaded from the database
-	*  @param	$post_id (mixed) the $post_id from which the value was loaded
-	*  @param	$field (array) the field array holding all the field options
-	*  @param	$template (boolean) true if value requires formatting for front end template function
-	*  @return	$value
-	*/
-		
-	/*
-	
-	function format_value( $value, $post_id, $field, $template ) {
-		
-		// bail early if not template function such as get_field()
-		if( !$template )
-		{
-			return $value
+	function format_value( $value, $post_id, $field )
+	{
+		if(!is_array($value)) {
+			$value = explode(",", $value);
+			array_map('trim', $value);
 		}
-		
 		return $value;
 	}
-	
-	*/
-	
-	
-	/*
-	*  validate_value()
-	*
-	*  This filter is used to perform validation on the value prior to saving.
-	*  All values are validated regardless of the field's required setting. This allows you to validate and return
-	*  messages to the user if the value is not correct
-	*
-	*  @type	filter
-	*  @date	11/02/2014
-	*  @since	5.0.0
-	*
-	*  @param	$valid (boolean) validation status based on the value and the field's required setting
-	*  @param	$value (mixed) the $_POST value
-	*  @param	$field (array) the field array holding all the field options
-	*  @param	$input (string) the corresponding input name for $_POST value
-	*  @return	$valid
-	*/
-	
-	/*
-	
-	function validate_value( $valid, $value, $field, $input ){
-		
-		// Basic usage
-		if( $value < $field['custom_minimum_setting'] )
-		{
-			$valid = false;
-		}
-		
-		
-		// Advanced usage
-		if( $value < $field['custom_minimum_setting'] )
-		{
-			$valid = __('The value is too little!','acf-select2'),
-		}
-		
-		
-		// return
-		return $valid;
-		
-	}
-	
-	*/
-	
-	
-	/*
-	*  delete_value()
-	*
-	*  This action is fired after a value has been deleted from the db.
-	*  Please note that saving a blank value is treated as an update, not a delete
-	*
-	*  @type	action
-	*  @date	6/03/2014
-	*  @since	5.0.0
-	*
-	*  @param	$post_id (mixed) the $post_id from which the value was deleted
-	*  @param	$key (string) the $meta_key which the value was deleted
-	*  @return	n/a
-	*/
-	
-	/*
-	
-	function delete_value( $post_id, $key ) {
-		
-		
-		
-	}
-	
-	*/
-	
-	
-	/*
-	*  load_field()
-	*
-	*  This filter is applied to the $field after it is loaded from the database
-	*
-	*  @type	filter
-	*  @date	23/01/2013
-	*  @since	3.6.0	
-	*
-	*  @param	$field (array) the field array holding all the field options
-	*  @return	$field
-	*/
-	
-	/*
-	
-	function load_field( $field ) {
-		
-		return $field;
-		
-	}	
-	
-	*/
-	
-	
-	/*
-	*  update_field()
-	*
-	*  This filter is applied to the $field before it is saved to the database
-	*
-	*  @type	filter
-	*  @date	23/01/2013
-	*  @since	3.6.0
-	*
-	*  @param	$field (array) the field array holding all the field options
-	*  @return	$field
-	*/
-	
-	/*
-	
-	function update_field( $field ) {
-		
-		return $field;
-		
-	}	
-	
-	*/
-	
-	
-	/*
-	*  delete_field()
-	*
-	*  This action is fired after a field is deleted from the database
-	*
-	*  @type	action
-	*  @date	11/02/2014
-	*  @since	5.0.0
-	*
-	*  @param	$field (array) the field array holding all the field options
-	*  @return	n/a
-	*/
-	
-	/*
-	
-	function delete_field( $field ) {
-		
-		
-		
-	}	
-	
-	*/
-	
-	
+
 }
-
 
 // create field
 new acf_field_select2();
